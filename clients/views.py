@@ -1,85 +1,69 @@
+import logging
 from django.views import View
-from django.contrib.auth import aauthenticate, alogin
+from django.contrib.auth import authenticate, login
 from django.contrib.auth.hashers import make_password
 from django.http import HttpResponse, HttpRequest
 from django.shortcuts import render, redirect
-from django.core.exceptions import ValidationError
 from django.contrib import messages
 
 from clients.models import Client
-from clients.validators import StrongPasswordValidator
+
+logger = logging.getLogger()
 
 
-class HomeView(View):
-    """Home View."""
-
-    async def get(self, request: HttpRequest) -> HttpResponse:
+class BasePageView(View):
+    def get(self, request: HttpRequest) -> HttpResponse:
         return HttpResponse(content="Hello")
 
 
-class AuthView(View):
-    """Auth view."""
-
-    async def get(
-        self, request: HttpRequest, *args, **kwargs
-    ) -> HttpResponse:
-        return render(request=request, template_name="login.html")
-
-    async def post(
-        self, request: HttpRequest, *args, **kwargs
-    ) -> HttpResponse:
-        username = request.POST.get("username")
-        password = request.POST.get("password")
-        client: Client = await aauthenticate(
-            request=request, username=username, password=password
-        )
-        if client:
-            await alogin(request=request, user=client)
-            return redirect(to="home")
-        else:
-            messages.error(
-                request=request, message="Неверный логин или пароль!"
-            )
-        return render(request=request, template_name="login.html")
-        
-
 class RegistrationView(View):
-    """Registration View."""
-
-    async def get(
-        self, request: HttpRequest, *args, **kwargs
-    ) -> HttpResponse:
+    def get(self, request: HttpRequest) -> HttpResponse:
         return render(request=request, template_name="reg.html")
-    
-    async def post(
-        self, request: HttpRequest, *args, **kwargs
-    ) -> HttpResponse:
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        username = request.POST.get("username")
         email = request.POST.get("email")
+        raw_password = request.POST.get("password")
+
+        if len(raw_password) < 8:
+            messages.error(request, message="малый пароль")
+            return render(request=request, template_name="reg.html")
+
+        try:
+            Client.objects.create(
+                email=email,
+                username=username,
+                password=make_password(raw_password)
+            )
+            messages.info(request, message="спасибо за регулю")
+            return render(request=request, template_name="reg.html")
+
+        except Exception as e:
+            logger.error("Ошибка при регистрации", exc_info=e)
+            messages.error(request, message=str(e))
+            return render(request=request, template_name="reg.html")
+
+
+class LoginView(View):
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return render(request=request, template_name="login.html")
+
+    def post(self, request: HttpRequest) -> HttpResponse:
         username = request.POST.get("username")
         password = request.POST.get("password")
-        try:
-            StrongPasswordValidator()(value=password)
-        except ValidationError as e:
-            messages.error(request=request, message=str(e))
-            return render(request, "reg.html")
+        client: Client | None = authenticate(
+            request=request,
+            username=username,
+            password=password
+        )
 
-        try:
-            _, created = await Client.objects.aget_or_create(
-                username=username, email=email, 
-                defaults={
-                    "password": make_password(password=password)
-                },
-            )
-        except ValidationError as e:
-            messages.error(request=request, message=str(e))
-            return render(request, "reg.html")
-        
-        if not created:
-            messages.error(
-                request=request, 
-                message="Такой пользователь уже существует!"
-            )
-            return render(request, "reg.html")
+        if not client:
+            messages.error(request=request, message="Неверный логин или пароль!")
+            return render(request, "login.html")
 
-        messages.success(request, "Вы успешно зарегистрированы!")
+        login(request=request, user=client)
+        messages.success(request, "Вы успешно вошли!")
         return redirect("home")
+
+
+
